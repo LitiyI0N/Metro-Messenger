@@ -2,17 +2,15 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const Database = require('better-sqlite3'); // Если ты его не подключал, закомментируй эту строку и код с db
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// ЕСЛИ БАЗЫ НЕТ, ОСТАВЬ ТОЛЬКО ЭТИ ДВЕ СТРОКИ:
+// Храним всё в памяти
 let messages = []; 
-let avatars = {}; // Тут храним аватарки в оперативке
+let avatars = {}; 
 
-// Раздаем index.html
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -33,12 +31,11 @@ io.on('connection', (socket) => {
       currentUser = { id: user.id, login: data.login };
       onlineUsers[currentUser.id] = socket.id;
       
-      // Отдаем историю и текущие аватарки
       callback({ 
           ok: true, 
           user: currentUser, 
           messages: messages, 
-          avatars: avatars, // <--- Отдаем аватарки
+          avatars: avatars, 
           peers: [{id:1, login:'LitiyI0N'}, {id:2, login:'Usman24'}] 
       });
       
@@ -52,9 +49,10 @@ io.on('connection', (socket) => {
   socket.on('set_avatar', (imgData) => {
     if (!currentUser) return;
     avatars[currentUser.id] = imgData;
-    io.emit('avatar_updated', { id: currentUser.id, img: imgData }); // Рассылаем всем
+    io.emit('avatar_updated', { id: currentUser.id, img: imgData });
   });
 
+  // Отправка сообщения
   socket.on('send_message', (msg) => {
     if (!currentUser) return;
     const newMsg = {
@@ -71,6 +69,7 @@ io.on('connection', (socket) => {
     io.emit('new_message', newMsg);
   });
 
+  // Прочитано
   socket.on('mark_read', () => {
     if (!currentUser) return;
     let changed = false;
@@ -83,16 +82,19 @@ io.on('connection', (socket) => {
     if (changed) io.emit('messages_read');
   });
 
+  // Печатает...
   socket.on('typing', () => {
     if (!currentUser) return;
     socket.broadcast.emit('peer_typing');
   });
 
+  // Очистка чата
   socket.on('clear_chat', () => {
     messages = [];
     io.emit('chat_cleared');
   });
 
+  // Выход
   socket.on('disconnect', () => {
     if (currentUser) {
       delete onlineUsers[currentUser.id];

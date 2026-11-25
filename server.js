@@ -7,12 +7,12 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { 
   cors: { origin: '*' },
-  maxHttpBufferSize: 1e7 // Разрешаем передавать до 10 мегабайт
+  maxHttpBufferSize: 1e7 // Фикс для картинок
 });
 
-// Храним всё в памяти
 let messages = []; 
 let avatars = {}; 
+let lastSeen = {}; // <-- Храним время последнего визита
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
@@ -34,28 +34,30 @@ io.on('connection', (socket) => {
       currentUser = { id: user.id, login: data.login };
       onlineUsers[currentUser.id] = socket.id;
       
+      // Оповещаем друга, что мы зашли
+      socket.broadcast.emit('status', { user_id: currentUser.id, peer_online: true });
+
+      // Отдаем данные при входе
       callback({ 
           ok: true, 
           user: currentUser, 
           messages: messages, 
           avatars: avatars, 
+          last_seen: lastSeen, // <-- Передаем историю визитов
+          online_peers: Object.keys(onlineUsers).map(Number),
           peers: [{id:1, login:'LitiyI0N'}, {id:2, login:'Usman24'}] 
       });
-      
-      io.emit('status', { peer_online: true });
     } else {
       callback({ ok: false, error: 'Неверный логин или пароль' });
     }
   });
 
-  // Обновление аватарки
   socket.on('set_avatar', (imgData) => {
     if (!currentUser) return;
     avatars[currentUser.id] = imgData;
     io.emit('avatar_updated', { id: currentUser.id, img: imgData });
   });
 
-  // Отправка сообщения
   socket.on('send_message', (msg) => {
     if (!currentUser) return;
     const newMsg = {
@@ -72,7 +74,6 @@ io.on('connection', (socket) => {
     io.emit('new_message', newMsg);
   });
 
-  // Прочитано
   socket.on('mark_read', () => {
     if (!currentUser) return;
     let changed = false;
@@ -85,23 +86,27 @@ io.on('connection', (socket) => {
     if (changed) io.emit('messages_read');
   });
 
-  // Печатает...
   socket.on('typing', () => {
     if (!currentUser) return;
     socket.broadcast.emit('peer_typing');
   });
 
-  // Очистка чата
   socket.on('clear_chat', () => {
     messages = [];
     io.emit('chat_cleared');
   });
 
-  // Выход
   socket.on('disconnect', () => {
     if (currentUser) {
       delete onlineUsers[currentUser.id];
-      io.emit('status', { peer_online: false });
+      lastSeen[currentUser.id] = Date.now(); // <-- Запоминаем время выхода
+      
+      // Оповещаем друга, что мы вышли
+      socket.broadcast.emit('status', { 
+        user_id: currentUser.id, 
+        peer_online: false, 
+        last_seen: lastSeen[currentUser.id] 
+      });
     }
   });
 });

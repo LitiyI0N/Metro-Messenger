@@ -51,7 +51,6 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);
 .status-dot{width:10px;height:10px;border-radius:50%;background:#555;transition: background 0.3s;}
 .status-dot.online{background:#2ecc71; animation: pulse 2s infinite;}
 
-/* КАСТОМНЫЙ ФОН ЧАТА */
 .messages{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px; background-size: cover; background-position: center; background-attachment: fixed;}
 .messages::-webkit-scrollbar,aside::-webkit-scrollbar{width:8px}
 .messages::-webkit-scrollbar-thumb,aside::-webkit-scrollbar-thumb{background:#333}
@@ -87,7 +86,6 @@ body.light .reply-bar { background: #e5e5e5; } .reply-bar .reply-text{font-size:
 .contact{display:flex;align-items:center;gap:10px;padding:12px;cursor:pointer;border-bottom:1px solid var(--border);transition: background 0.15s;}
 .contact:hover{background:rgba(128,128,128,0.1)}
 .contact.active{background:var(--accent);color:#fff;}
-/* АВАТАРКИ */
 .avatar{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;font-weight:700;font-size:17px;background:#D13438;color:#fff;overflow: hidden; border-radius: 4px;}
 .avatar img {width: 100%; height: 100%; object-fit: cover;}
 
@@ -176,7 +174,6 @@ body.light .reply-bar { background: #e5e5e5; } .reply-bar .reply-text{font-size:
   </div>
 </div>
 
-<!-- Скрытые инпуты для загрузки картинок -->
 <input type="file" id="avaInput" accept="image/*" style="display:none">
 <input type="file" id="bgInput" accept="image/*" style="display:none">
 
@@ -196,7 +193,10 @@ let peers = [];
 let current = null;
 const store = {};   
 const unread = {};   
-let avatars = {}; // Глобальный объект с аватарками
+let avatars = {}; 
+let peersLastSeen = {}; // <-- Время последнего визита друга
+let onlinePeers = {};   // <-- Кто сейчас онлайн
+
 let replyContext = null;
 let attachImage = null;
 let socket = null;
@@ -223,7 +223,7 @@ $('bgInput').onchange = function() {
     reader.onload = (e) => {
         const bgData = e.target.result;
         messagesEl.style.backgroundImage = `url(${bgData})`;
-        localStorage.setItem('mm_bg', bgData); // Сохраняем в браузере
+        localStorage.setItem('mm_bg', bgData);
     };
     reader.readAsDataURL(this.files[0]);
     this.value = '';
@@ -269,7 +269,14 @@ $('loginForm').addEventListener('submit', e => {
     
     me = res.user;
     peers = res.peers;
-    avatars = res.avatars || {}; // Загружаем аватарки
+    avatars = res.avatars || {}; 
+    peersLastSeen = res.last_seen || {}; // <-- Забираем историю визитов
+    
+    onlinePeers = {}; // Обнуляем
+    if (res.online_peers) {
+        res.online_peers.forEach(id => onlinePeers[id] = true); // Запоминаем кто онлайн
+    }
+
     res.messages.forEach(m => ingest(m, true));
     
     loginEl.classList.add('hidden'); 
@@ -300,9 +307,13 @@ $('loginForm').addEventListener('submit', e => {
     window.typingTimeout = setTimeout(() => { tEl.style.display = 'none'; }, 3000);
   });
 
+  // НОВЫЙ ОБРАБОТЧИК СТАТУСА
   socket.on('status', (data) => {
-    $('peerStatus').className = 'status-dot ' + (data.peer_online ? 'online' : '');
-    if (current) chatHeadEl.textContent = peerById(current).login + (data.peer_online ? '' : ' (не в сети)');
+    if (data.user_id) {
+        onlinePeers[data.user_id] = data.peer_online;
+        if (data.last_seen) peersLastSeen[data.user_id] = data.last_seen;
+        updatePeerStatus(); // Обновляем заголовок
+    }
   });
 
   socket.on('messages_read', () => {
@@ -449,6 +460,35 @@ function peerById(id) {
   return peers.find(p => +p.id === +id) || { id, login: '—' };
 }
 
+// ФУНКЦИЯ ОБНОВЛЕНИЯ СТАТУСА В ШАПКЕ
+function updatePeerStatus() {
+    if (!current) return;
+    const peer = peerById(current);
+    const isOnline = onlinePeers[peer.id] || false;
+    const lastSeen = peersLastSeen[peer.id];
+    
+    $('peerStatus').className = 'status-dot ' + (isOnline ? 'online' : '');
+    
+    if (isOnline) {
+        chatHeadEl.textContent = peer.login; // Если онлайн, просто имя
+    } else {
+        let timeText = 'не в сети';
+        if (lastSeen) {
+            const d = new Date(lastSeen);
+            const today = new Date();
+            const isToday = d.getDate() === today.getDate() && d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
+            const timeStr = d.toLocaleTimeString('ru-RU', {hour: '2-digit', minute:'2-digit'});
+            
+            if (isToday) {
+                timeText = `был(а) в сети в ${timeStr}`;
+            } else {
+                timeText = `был(а) в сети ${d.toLocaleDateString('ru-RU')} в ${timeStr}`;
+            }
+        }
+        chatHeadEl.textContent = `${peer.login} (${timeText})`;
+    }
+}
+
 function renderContacts() {
   contactsEl.innerHTML = '';
   for (const p of peers) {
@@ -459,7 +499,6 @@ function renderContacts() {
     el.className = 'contact' + (p.id === current ? ' active' : '');
     let preview = last ? (last.sender_id === me.id ? 'Вы: ' : '') + (last.image ? '📷 Картинка' : last.body) : 'Нет сообщений';
     
-    // Отрисовка аватарки (картинка или буква)
     let avatarHtml = '';
     if (avatars[p.id]) {
         avatarHtml = `<div class="avatar"><img src="${avatars[p.id]}" alt="ava"></div>`;
@@ -482,7 +521,7 @@ function renderContacts() {
 
 function openChat(pid) {
   current = pid; unread[pid] = 0;
-  chatHeadEl.textContent = peerById(pid).login;
+  updatePeerStatus(); // <-- Вызываем обновление статуса при клике
   renderContacts(); renderMessages();
   if (socket) socket.emit('mark_read');
   textEl.focus();
